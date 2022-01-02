@@ -1,0 +1,85 @@
+# Deploy Containerized PHP App on Openstack IaaS Cloud
+
+- OpenStack Version: Wallaby
+- OpenStack Services: Magnum, Trove, Octavia
+- COE: Kubernetes v1.20.12
+- App: WordPress
+- DB: MariaDB 10.7
+
+#1. Create a Kubernetes cluster
+source karno-openrc.sh
+openstack coe cluster create phpid-ol-kube --cluster-template template-kubernetes-v1.20.12-rancher1 --keypair key-0 --master-count 1 --master-flavor flavor-4-4-40 --node-count 1 --flavor flavor-4-4-40
+openstack coe cluster list
+
+#2. Create database instances
+openstack network list
+openstack database instance create --flavor flavor-2-2-20 --size 1 --databases wordpress --users wpuser:rahasia --datastore mariadb --datastore-version 10.7 --nic net-id=eead2df2-a4c6-4b25-b3d8-c97c2136450c phpid-ol-db
+openstack database instance list
+
+#3. Create a working instance
+openstack server create --flavor flavor-2-2-20 --image CentOS-Stream-GenericCloud-8-20210603.0.x86_64 --network net-int-0 --security-group sg-0 --key-name key-0 phpid-ol-working
+openstack server list
+openstack console log show phpid-ol-working
+
+#4. Create a floating IP and attach it to the instance
+openstack floating ip create net-ext
+openstack floating ip list
+openstack server add floating ip phpid-ol-working 10.14.14.1XX
+openstack floating ip list
+openstack server list
+
+#5. Login to the instance, copy and update the self-signed CA root cert
+ping -c 3 10.14.14.1XX
+scp /etc/kolla/certificates/ca/root.crt centos@10.14.14.1XX:~/stratus-root-ca.crt
+ssh -l centos 10.14.14.1XX
+sudo cp ~/stratus-root-ca.crt /etc/pki/ca-trust/source/anchors/stratus-root-ca.crt
+sudo update-ca-trust
+
+#6. Create and load user openrc
+cat <<EOF > karno-openrc.sh
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_NAME=project-0
+export OS_TENANT_NAME=project-0
+export OS_USERNAME=karno
+export OS_PASSWORD=rahasia
+export OS_AUTH_URL=https://external.stratus.ok:5000/v3
+export OS_INTERFACE=public
+export OS_ENDPOINT_TYPE=publicURL
+export OS_IDENTITY_API_VERSION=3
+export OS_REGION_NAME=RegionOne
+export OS_AUTH_PLUGIN=password
+export OS_CACERT=~/stratus-root-ca.crt
+EOF
+
+#7. Test the OpenStack command
+sudo yum install -y centos-release-openstack-wallaby epel-release
+sudo yum erase -y epel-next-release
+sudo yum install -y python3-openstackclient python3-barbicanclient python3-heatclient python3-magnumclient python3-octaviaclient python3-troveclient python3-muranoclient python3-swiftclient
+source karno-openrc.sh
+openstack project list
+
+#8. Check cluster
+sudo yum install -y wget
+mkdir bin
+wget -c https://dl.k8s.io/release/v1.20.12/bin/linux/amd64/kubectl -O bin/kubectl
+chmod +x bin/kubectl 
+mkdir -p ~/clusters/phpid-ol
+rm -rf ~/clusters/phpid-ol/config
+$(openstack coe cluster config phpid-ol --dir ~/clusters/phpid-ol)
+export KUBECONFIG=~/clusters/phpid-ol/config 
+kubectl -n kube-system get po
+
+#9. Modify octavia-ingress-controller configmap
+kubectl -n kube-system edit configmap octavia-ingress-controller-config
+...
+      password: rahasia
+...
+
+kubectl -n kube-system delete po octavia-ingress-controller-0
+kubectl -n kube-system get po
+
+#10. Test access the database from database client instance
+sudo yum install -y mariadb
+openstack database instance list
+mysql -h 10.0.0.XXX -u wpuser -prahasia wordpress
