@@ -1,7 +1,7 @@
 # Deploy Containerized PHP App on Openstack IaaS Cloud
 
 - OpenStack Version: Wallaby
-- OpenStack Services: Magnum, Trove, Octavia, Cinder
+- OpenStack Services: Magnum, Trove, Octavia, Cinder, Barbican
 - COE: Kubernetes v1.20.12
 - App: WordPress 5.8
 - DB: MariaDB 10.7
@@ -32,8 +32,9 @@ openstack server list
 ping -c 3 10.14.14.1XX
 scp /home/karno/.ssh/id_rsa* centos@10.14.14.1XX:~/.ssh/
 scp /etc/kolla/certificates/ca/root.crt centos@10.14.14.1XX:~/stratus-root-ca.crt
+scp /etc/kolla/certificates/private/root/root.key centos@10.14.14.1XX:~/stratus-root-ca.key
 ssh -l centos 10.14.14.1XX
-sudo cp ~/stratus-root-ca.crt /etc/pki/ca-trust/source/anchors/stratus-root-ca.crt
+sudo cp ~/stratus-root-ca.crt /etc/pki/ca-trust/source/anchors/
 sudo update-ca-trust
 
 #6. Create and load user openrc
@@ -191,7 +192,18 @@ kubectl get services wordpress
 openstack server list
 ssh -l core 10.0.0.XXX curl -v http://10.254.YYY.YYY
 
-#16. Create an ingress resource
+#16. Create web key and certificate
+mkdir certs
+openssl genrsa -out certs/wp.phpid-ol.ok.key
+openssl req -new -key certs/wp.phpid-ol.ok.key -out certs/wp.phpid-ol.ok.csr -addext "subjectAltName = DNS:wp.phpid-ol.ok"
+
+openssl x509 -req -extfile <(printf "subjectAltName=DNS:wp.phpid-ol.ok") -days 365 -in certs/wp.phpid-ol.ok.csr -CA ~/stratus-root-ca.crt -CAkey ~/stratus-root-ca.key -CAcreateserial -out certs/wp.phpid-ol.ok.crt
+
+#17. Create secret using the certificates created.
+kubectl create secret tls tls-secret --cert certs/wp.phpid-ol.ok.crt --key certs/wp.phpid-ol.ok.key
+kubectl get secret tls-secret
+
+#18. Create an ingress resource
 cat <<EOF > wordpress-octavia-ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -201,6 +213,8 @@ metadata:
     kubernetes.io/ingress.class: "openstack"
     octavia.ingress.kubernetes.io/internal: "false"
 spec:
+  tls:
+    - secretName: tls-secret
   rules:
   - host: wp.phpid-ol.ok
     http:
@@ -217,5 +231,8 @@ EOF
 kubectl apply -f wordpress-octavia-ingress.yaml
 kubectl get ing -w
 #Ctrl+C
+openstack secret list
 openstack loadbalancer list
-curl -v -H "Host: wp.phpid-ol.ok" http://10.14.14.1XX
+IP=10.14.14.1XX
+echo "$IP wp.phpid-ol.ok" | sudo tee -a /etc/hosts
+curl -v https://wp.phpid-ol.ok
