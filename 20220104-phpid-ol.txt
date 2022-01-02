@@ -1,9 +1,9 @@
 # Deploy Containerized PHP App on Openstack IaaS Cloud
 
 - OpenStack Version: Wallaby
-- OpenStack Services: Magnum, Trove, Octavia
+- OpenStack Services: Magnum, Trove, Octavia, Cinder
 - COE: Kubernetes v1.20.12
-- App: WordPress
+- App: WordPress 5.8
 - DB: MariaDB 10.7
 
 #1. Create a Kubernetes cluster
@@ -30,6 +30,7 @@ openstack server list
 
 #5. Login to the instance, copy and update the self-signed CA root cert
 ping -c 3 10.14.14.1XX
+scp /home/karno/.ssh/id_rsa* centos@10.14.14.1XX:~/.ssh/
 scp /etc/kolla/certificates/ca/root.crt centos@10.14.14.1XX:~/stratus-root-ca.crt
 ssh -l centos 10.14.14.1XX
 sudo cp ~/stratus-root-ca.crt /etc/pki/ca-trust/source/anchors/stratus-root-ca.crt
@@ -59,7 +60,12 @@ sudo yum install -y python3-openstackclient python3-barbicanclient python3-heatc
 source karno-openrc.sh
 openstack project list
 
-#8. Check cluster
+#8. Test access the database from database client instance
+sudo yum install -y mariadb
+openstack database instance list
+mysql -h 10.0.0.XXX -u wpuser -prahasia wordpress
+
+#9. Check Kube cluster
 sudo yum install -y wget
 mkdir bin
 wget -c https://dl.k8s.io/release/v1.20.12/bin/linux/amd64/kubectl -O bin/kubectl
@@ -70,7 +76,7 @@ $(openstack coe cluster config phpid-ol --dir ~/clusters/phpid-ol)
 export KUBECONFIG=~/clusters/phpid-ol/config 
 kubectl -n kube-system get po
 
-#9. Modify octavia-ingress-controller configmap
+#10. Modify octavia-ingress-controller configmap
 kubectl -n kube-system edit configmap octavia-ingress-controller-config
 ...
       password: rahasia
@@ -79,7 +85,137 @@ kubectl -n kube-system edit configmap octavia-ingress-controller-config
 kubectl -n kube-system delete po octavia-ingress-controller-0
 kubectl -n kube-system get po
 
-#10. Test access the database from database client instance
-sudo yum install -y mariadb
-openstack database instance list
-mysql -h 10.0.0.XXX -u wpuser -prahasia wordpress
+
+#11. Create Storage Class from Cinder CSI
+https://github.com/utianayuba/kolla-ansible-aio-configs/blob/wallaby-centos/cinder-csi-test.txt
+
+
+### WordPress Deplyment Tutorial: https://kubernetes.io/docs/tutorials/stateful-application/mysql-wordpress-persistent-volume/
+
+#12. Create wordpress deployment directory
+mkdir wp
+cd wp
+
+#13. Create wordpress-deployment.yaml
+cat <<EOF >./wordpress-deployment.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+  labels:
+    app: wordpress
+spec:
+  ports:
+    - port: 80
+  selector:
+    app: wordpress
+    tier: frontend
+  type: NodePort
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wp-pv-claim
+  labels:
+    app: wordpress
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  labels:
+    app: wordpress
+spec:
+  selector:
+    matchLabels:
+      app: wordpress
+      tier: frontend
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: wordpress
+        tier: frontend
+    spec:
+      containers:
+      - image: wordpress:5.8
+        name: wordpress
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: 10.0.0.69 
+        - name: WORDPRESS_DB_NAME
+          value: wordpress
+        - name: WORDPRESS_DB_USER
+          value: wpuser
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mariadb-pass
+              key: password
+        ports:
+        - containerPort: 80
+          name: wordpress
+        volumeMounts:
+        - name: wordpress-persistent-storage
+          mountPath: /var/www/html
+      volumes:
+      - name: wordpress-persistent-storage
+        persistentVolumeClaim:
+          claimName: wp-pv-claim
+EOF
+
+#14. Create a Secret generator
+cat <<EOF >./kustomization.yaml
+secretGenerator:
+- name: mariadb-pass
+  literals:
+  - password=rahasia
+resources:
+  - wordpress-deployment.yaml
+EOF
+
+#15. Apply and verify
+kubectl apply -k ./
+kubectl get secrets
+kubectl get pvc
+openstack volume list
+kubectl get pods
+kubectl get services wordpress
+openstack server list
+ssh -l core 10.0.0.XXX curl -v http://10.254.YYY.YYY
+
+#16. Create an ingress resource
+cat <<EOF > wordpress-octavia-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wordpress-octavia-ingress
+  annotations:
+    kubernetes.io/ingress.class: "openstack"
+    octavia.ingress.kubernetes.io/internal: "false"
+spec:
+  rules:
+  - host: wp.phpid-ol.ok
+    http:
+      paths:
+      - path: /
+        pathType: Exact
+        backend:
+          service:
+            name: wordpress
+            port:
+              number: 80
+EOF
+
+kubectl apply -f wordpress-octavia-ingress.yaml
+kubectl get ing -w
+#Ctrl+C
+openstack loadbalancer list
+curl -v -H "Host: wp.phpid-ol.ok" http://10.14.14.1XX
