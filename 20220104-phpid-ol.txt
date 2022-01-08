@@ -1,7 +1,7 @@
 # Deploy Containerized PHP App on Openstack IaaS Cloud
 
 - OpenStack Version: Wallaby
-- OpenStack Services: Magnum, Trove, Octavia, Cinder, Barbican
+- OpenStack Services: Core Services, Magnum, Trove, Octavia, Cinder, Barbican
 - COE: Kubernetes v1.20.12
 - App: WordPress 5.8
 - DB: MariaDB 10.7
@@ -88,7 +88,7 @@ kubectl -n kube-system get po
 
 
 #11. Create Storage Class from Cinder CSI
-https://github.com/utianayuba/kolla-ansible-aio-configs/blob/wallaby-centos/cinder-csi-test.txt
+# https://github.com/utianayuba/kolla-ansible-aio-configs/blob/wallaby-centos/cinder-csi-test.txt
 
 
 ### WordPress Deplyment Tutorial: https://kubernetes.io/docs/tutorials/stateful-application/mysql-wordpress-persistent-volume/
@@ -182,7 +182,7 @@ resources:
   - wordpress-deployment.yaml
 EOF
 
-#15. Apply and verify
+#15. Apply and verify WordPress deployment
 kubectl apply -k ./
 kubectl get secrets
 kubectl get pvc
