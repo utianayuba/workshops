@@ -12,9 +12,15 @@ terraform -install-autocomplete
 #2. Create a working directory
 mkdir cyberfest
 cd cyberfest
-wget -c https://download.fedoraproject.org/pub/fedora/linux/releases/34/Cloud/x86_64/images/Fedora-Cloud-Base-34-1.2.x86_64.qcow2
 
-#3. Create main.tf file
+#3. Download Kali Linux VMware image file and convert it to qcow2
+wget -c https://kali.download/virtual-images/kali-2021.4a/kali-linux-2021.4a-vmware-amd64.7z
+7za x kali-linux-2021.4a-vmware-amd64.7z
+qemu-img convert -O qcow2 Kali-Linux-2021.4a-vmware-amd64.vmwarevm/Kali-Linux-2021.4a-vmware-amd64.vmdk Kali-Linux-2021.4a-amd64.qcow2
+qemu-img info Kali-Linux-2021.4a-amd64.qcow2
+rm -rf qcow2 Kali-Linux-2021.4a-vmware-amd64.vmwarevm
+
+#4. Create main.tf file to deploy Kali Linux VM
 tee main.tf <<EOF
 terraform {
   required_providers {
@@ -40,9 +46,6 @@ resource "libvirt_network" "cyberfest" {
   }
   dns {
     enabled = true
-    forwarders {
-      address = "8.8.8.8"
-    }
   }
 }
 
@@ -52,63 +55,99 @@ resource "libvirt_pool" "cyberfest" {
   path = "/mnt/virtual/qemu/cyberfest"
 }
 
-resource "libvirt_volume" "fedora" {
-  name   = "Fedora-Cloud-Base-34-1.2.x86_64.qcow2"
+resource "libvirt_volume" "image-kali" {
+  name   = "Kali-Linux-2021.4a-amd64.qcow2"
   pool   = libvirt_pool.cyberfest.name
-  source = "./Fedora-Cloud-Base-34-1.2.x86_64.qcow2"
+  source = "./Kali-Linux-2021.4a-amd64.qcow2"
   format = "qcow2"
 }
 
-resource "libvirt_volume" "nst" {
-  name             = "nst-34.qcow2"
+resource "libvirt_volume" "kali" {
+  name             = "kali.qcow2"
   pool             = libvirt_pool.cyberfest.name
-  base_volume_name = libvirt_volume.fedora.name
+  base_volume_name = libvirt_volume.image-kali.name
   size             = 107374182400
   format           = "qcow2"
 }
 
-data "template_file" "user_data" {
-  template = file("${path.module}/cloud_init.cfg")
-}
-
-data "template_file" "network_config" {
-  template = file("${path.module}/network_config.cfg")
-}
-
-resource "libvirt_cloudinit_disk" "commoninit" {
-  name           = "commoninit.iso"
-  user_data      = data.template_file.user_data.rendered
-  network_config = data.template_file.network_config.rendered
-  pool           = libvirt_pool.cyberfest.name
-}
-
-resource "libvirt_domain" "nst" {
-  name       = "nst-34"
+resource "libvirt_domain" "kali" {
+  name       = "kali"
   arch       = "x86_64"
+  machine    = "pc-q35-6.1"
   vcpu       = 4
   memory     = 8192
   qemu_agent = "true"
-  cloudinit  = libvirt_cloudinit_disk.commoninit.id
   cpu {
-    mode = "host-model"
+    mode = "host-passthrough"
   }
   video {
     type = "qxl"
   }
   network_interface {
     network_name   = libvirt_network.cyberfest.name
-    hostname       = "nst-34"
+    hostname       = "kali"
     mac            = "52:54:00:aa:aa:aa"
-    addresses      = ["172.16.15.10"]
-    wait_for_lease = true
+    addresses      = ["172.16.15.11"]
   }
   disk {
-    volume_id = libvirt_volume.nst.id
+    volume_id = libvirt_volume.kali.id
   }
 }
 EOF
 
-#4. Create cloud_init.cfg file
+#5. Deploy Kali Linux VM
+sudo terraform init
+sudo terraform plan
+sudo terraform apply -auto-approve
+
+#6. Edit main.tf file to deploy Windows Server 2019 VM
+tee -a main.tf <<EOF
+
+resource "libvirt_volume" "image-win2019" {
+  name   = "17763.737.190906-2324.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_en-us_1.qcow2"
+  pool   = libvirt_pool.cyberfest.name
+  source = "./17763.737.190906-2324.rs5_release_svc_refresh_SERVER_EVAL_x64FRE_en-us_1.qcow2"
+  format = "qcow2"
+}
+
+resource "libvirt_volume" "win2019" {
+  name             = "win2019.qcow2"
+  pool             = libvirt_pool.cyberfest.name
+  base_volume_name = libvirt_volume.image-win2019.name
+  size             = 107374182400
+  format           = "qcow2"
+}
+
+resource "libvirt_domain" "win2019" {
+  name       = "win2019"
+  arch       = "x86_64"
+  machine    = "pc-q35-6.1"
+  vcpu       = 4
+  memory     = 8192
+  qemu_agent = "true"
+  cpu {
+    mode = "host-passthrough"
+  }
+  video {
+    type = "qxl"
+  }
+  network_interface {
+    network_name   = libvirt_network.cyberfest.name
+    hostname       = "win2019"
+    mac            = "52:54:00:bb:bb:bb"
+    addresses      = ["172.16.15.12"]
+  }
+  disk {
+    volume_id = libvirt_volume.win2019.id
+  }
+}
+EOF
+
+#7. Deploy Windows Server 2019 VM
+sudo terraform plan
+sudo terraform apply -auto-approve
+
+#8. Create cloud_init.cfg file
 mkpasswd --method=SHA-512 --rounds=4096
 
 tee cloud_init.cfg <<EOF
@@ -122,7 +161,7 @@ users:
       - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDZoIbsUfcwKXpQVXlCP+6Qf/bCs0WnJiYY8I0iuMaPX+6tMDA9mwRUj6i6gyLhyYa+AVEd1j3MbwJ2oute4Q4Y1QNPZUbC10g9ToYHUp+rCd5x3Jytn8CXztz6Z9KMG+YBy0otjuaeFOFKij0zTuUMZWXYBoKR7q9rKMkedyFMSFRMsjC5kF2oArFJgPAZRBQkWbu9uxYQD6TpGrQnZwPkSbFP1XwX2bZCy0G5XQ+iEbV+y7sS7sL5jitFKg0RKm3yuxKBCT4lyBYdvNVH009Le6IjYtY2xkOhTnADI4nSf5Mu7yU4PIEbAWA4lys84LPoHjZ5ypT3DV6Dle9bgGWZ utian@truman
 EOF
 
-#5. Create network_config.cfg file
+#9. Create network_config.cfg file
 tee network_config.cfg <<EOF
 network:
   version: 1
