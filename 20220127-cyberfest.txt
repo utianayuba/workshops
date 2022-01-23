@@ -1,6 +1,8 @@
 # Host: Fedora 35
 # References:
 # - https://github.com/dmacvicar/terraform-provider-libvirt
+# - https://www.phillipsj.net/posts/building-a-windows-server-qcow2-image/
+# - https://docs.bigstack.co/docs/downloads/cloud_image
 
 #1. Install Terraform
 sudo dnf install -y dnf-plugins-core
@@ -18,7 +20,7 @@ wget -c https://kali.download/virtual-images/kali-2021.4a/kali-linux-2021.4a-vmw
 7za x kali-linux-2021.4a-vmware-amd64.7z
 qemu-img convert -O qcow2 Kali-Linux-2021.4a-vmware-amd64.vmwarevm/Kali-Linux-2021.4a-vmware-amd64.vmdk Kali-Linux-2021.4a-amd64.qcow2
 qemu-img info Kali-Linux-2021.4a-amd64.qcow2
-rm -rf qcow2 Kali-Linux-2021.4a-vmware-amd64.vmwarevm
+rm -rf kali-linux-2021.4a-vmware-amd64.7z qcow2 Kali-Linux-2021.4a-vmware-amd64.vmwarevm
 
 #4. Create main.tf file to deploy Kali Linux VM
 tee main.tf <<EOF
@@ -147,27 +149,94 @@ EOF
 sudo terraform plan
 sudo terraform apply -auto-approve
 
-#8. Create cloud_init.cfg file
+#8. Download Ubuntu 20.04 cloud image
+wget -c http://cloud-images-archive.ubuntu.com/releases/focal/release-20201014/ubuntu-20.04-server-cloudimg-amd64.img -O ubuntu-20.04-server-cloudimg-amd64-20201014.img
+
+#9. Edit main.tf file to deploy Ubuntu 20.04 VM
+tee -a main.tf <<EOF
+
+data "template_file" "user_data" {
+  template = file("${path.module}/cloud_init.cfg")
+}
+
+data "template_file" "network_config" {
+  template = file("${path.module}/network_config.cfg")
+}
+
+resource "libvirt_cloudinit_disk" "commoninit" {
+  name           = "commoninit.iso"
+  user_data      = data.template_file.user_data.rendered
+  network_config = data.template_file.network_config.rendered
+  pool           = libvirt_pool.cyberfest.name
+}
+
+resource "libvirt_volume" "image-ubuntu2004" {
+  name   = "ubuntu-20.04-server-cloudimg-amd64-20201014.img"
+  pool   = libvirt_pool.cyberfest.name
+  source = "./ubuntu-20.04-server-cloudimg-amd64-20201014.img"
+  format = "qcow2"
+}
+
+resource "libvirt_volume" "ubuntu2004" {
+  name             = "ubuntu2004.qcow2"
+  pool             = libvirt_pool.cyberfest.name
+  base_volume_name = libvirt_volume.image-ubuntu2004.name
+  size             = 107374182400
+  format           = "qcow2"
+}
+
+resource "libvirt_domain" "ubuntu2004" {
+  name       = "ubuntu2004"
+  arch       = "x86_64"
+  #machine    = "pc-q35-6.1"
+  vcpu       = 4
+  memory     = 8192
+  qemu_agent = "true"
+  cloudinit = libvirt_cloudinit_disk.commoninit.id
+  cpu {
+    mode = "host-passthrough"
+  }
+  video {
+    type = "qxl"
+  }
+  network_interface {
+    network_name   = libvirt_network.cyberfest.name
+    hostname       = "ubuntu2004"
+    mac            = "52:54:00:cc:cc:cc"
+    addresses      = ["172.16.15.13"]
+  }
+  disk {
+    volume_id = libvirt_volume.ubuntu2004.id
+  }
+}
+EOF
+
+#10. Create cloud_init.cfg file
 mkpasswd --method=SHA-512 --rounds=4096
 
 tee cloud_init.cfg <<EOF
 #cloud-config
 users:
-  - name: utian
+  - name: karno
     sudo: ALL=(ALL) NOPASSWD:ALL
     passwd: $6$rounds=4096$dEN6V47uqK2ucbuB$U1FD57fz51bbFpLaKO1HEdTx9Nrz09Y8JNifHQkIwu9/Oq2vg07PYd3YxLXSBU2yWRS02HCJLZGvH7pCYPQRQ/
     lock_passwd: false
+    shell: /bin/bash
     ssh_authorized_keys:
-      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDZoIbsUfcwKXpQVXlCP+6Qf/bCs0WnJiYY8I0iuMaPX+6tMDA9mwRUj6i6gyLhyYa+AVEd1j3MbwJ2oute4Q4Y1QNPZUbC10g9ToYHUp+rCd5x3Jytn8CXztz6Z9KMG+YBy0otjuaeFOFKij0zTuUMZWXYBoKR7q9rKMkedyFMSFRMsjC5kF2oArFJgPAZRBQkWbu9uxYQD6TpGrQnZwPkSbFP1XwX2bZCy0G5XQ+iEbV+y7sS7sL5jitFKg0RKm3yuxKBCT4lyBYdvNVH009Le6IjYtY2xkOhTnADI4nSf5Mu7yU4PIEbAWA4lys84LPoHjZ5ypT3DV6Dle9bgGWZ utian@truman
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDZoIbsUfcwKXpQVXlCP+6Qf/bCs0WnJiYY8I0iuMaPX+6tMDA9mwRUj6i6gyLhyYa+AVEd1j3MbwJ2oute4Q4Y1QNPZUbC10g9ToYHUp+rCd5x3Jytn8CXztz6Z9KMG+YBy0otjuaeFOFKij0zTuUMZWXYBoKR7q9rKMkedyFMSFRMsjC5kF2oArFJgPAZRBQkWbu9uxYQD6TpGrQnZwPkSbFP1XwX2bZCy0G5XQ+iEbV+y7sS7sL5jitFKg0RKm3yuxKBCT4lyBYdvNVH009Le6IjYtY2xkOhTnADI4nSf5Mu7yU4PIEbAWA4lys84LPoHjZ5ypT3DV6Dle9bgGWZ karno@cyberfest.ok
 EOF
 
-#9. Create network_config.cfg file
+#11. Create network_config.cfg file
 tee network_config.cfg <<EOF
 network:
   version: 1
   config:
   - type: physical
-    name: eth0
+    name: ens3
     subnets:
       - type: dhcp
 EOF
+
+#12. Deploy Ubuntu 20.04 VM
+sudo terraform plan
+sudo terraform apply -auto-approve
