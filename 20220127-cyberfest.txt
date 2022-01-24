@@ -248,3 +248,9 @@ EOF
 #12. Deploy Ubuntu 20.04 VM
 sudo terraform plan
 sudo terraform apply -auto-approve
+
+#13. Verify deployments
+
+#14. Destroy all deployments and redeploy
+sudo terraform destroy -auto-approve
+sudo terraform apply -auto-approve
