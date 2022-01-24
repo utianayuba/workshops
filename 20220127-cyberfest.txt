@@ -224,6 +224,14 @@ users:
     shell: /bin/bash
     ssh_authorized_keys:
       - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDZoIbsUfcwKXpQVXlCP+6Qf/bCs0WnJiYY8I0iuMaPX+6tMDA9mwRUj6i6gyLhyYa+AVEd1j3MbwJ2oute4Q4Y1QNPZUbC10g9ToYHUp+rCd5x3Jytn8CXztz6Z9KMG+YBy0otjuaeFOFKij0zTuUMZWXYBoKR7q9rKMkedyFMSFRMsjC5kF2oArFJgPAZRBQkWbu9uxYQD6TpGrQnZwPkSbFP1XwX2bZCy0G5XQ+iEbV+y7sS7sL5jitFKg0RKm3yuxKBCT4lyBYdvNVH009Le6IjYtY2xkOhTnADI4nSf5Mu7yU4PIEbAWA4lys84LPoHjZ5ypT3DV6Dle9bgGWZ karno@cyberfest.ok
+apt:
+  disable_suites: [$RELEASE-updates, $RELEASE-security, $RELEASE-backports]
+runcmd:
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  - sudo apt update
+  - sudo apt install -y docker-ce=5:19.03.9~3-0~ubuntu-focal docker-ce-cli=5:19.03.9~3-0~ubuntu-focal containerd.io
+  - sudo docker run --rm -d --name juice-shop -p 3000:3000 bkimminich/juice-shop
 EOF
 
 #11. Create network_config.cfg file
