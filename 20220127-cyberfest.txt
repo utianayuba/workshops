@@ -155,18 +155,18 @@ wget -c http://cloud-images-archive.ubuntu.com/releases/focal/release-20201014/u
 #9. Edit main.tf file to deploy Ubuntu 20.04 VM
 tee -a main.tf <<EOF
 
-data "template_file" "user_data" {
-  template = file("${path.module}/cloud_init.cfg")
+data "template_file" "user_data_ubuntu2004" {
+  template = file("${path.module}/cloud_init_ubuntu2004.cfg")
 }
 
-data "template_file" "network_config" {
-  template = file("${path.module}/network_config.cfg")
+data "template_file" "network_config_ubuntu2004" {
+  template = file("${path.module}/network_config_ubuntu2004.cfg")
 }
 
-resource "libvirt_cloudinit_disk" "commoninit" {
-  name           = "commoninit.iso"
-  user_data      = data.template_file.user_data.rendered
-  network_config = data.template_file.network_config.rendered
+resource "libvirt_cloudinit_disk" "ci-ubuntu2004" {
+  name           = "ci-ubuntu2004.iso"
+  user_data      = data.template_file.user_data_ubuntu2004.rendered
+  network_config = data.template_file.network_config_ubuntu2004.rendered
   pool           = libvirt_pool.cyberfest.name
 }
 
@@ -192,7 +192,7 @@ resource "libvirt_domain" "ubuntu2004" {
   vcpu       = 4
   memory     = 8192
   qemu_agent = "true"
-  cloudinit = libvirt_cloudinit_disk.commoninit.id
+  cloudinit = libvirt_cloudinit_disk.ci-ubuntu2004.id
   cpu {
     mode = "host-passthrough"
   }
@@ -211,11 +211,13 @@ resource "libvirt_domain" "ubuntu2004" {
 }
 EOF
 
-#10. Create cloud_init.cfg file
+#10. Create cloud_init_ubuntu2004.cfg file
 mkpasswd --method=SHA-512 --rounds=4096
 
-tee cloud_init.cfg <<EOF
+tee cloud_init_ubuntu2004.cfg <<EOF
 #cloud-config
+fqdn: ubuntu2004.cyberfest.id
+hostname: ubuntu2004.cyberfest.id
 users:
   - name: karno
     sudo: ALL=(ALL) NOPASSWD:ALL
@@ -226,16 +228,27 @@ users:
       - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDZoIbsUfcwKXpQVXlCP+6Qf/bCs0WnJiYY8I0iuMaPX+6tMDA9mwRUj6i6gyLhyYa+AVEd1j3MbwJ2oute4Q4Y1QNPZUbC10g9ToYHUp+rCd5x3Jytn8CXztz6Z9KMG+YBy0otjuaeFOFKij0zTuUMZWXYBoKR7q9rKMkedyFMSFRMsjC5kF2oArFJgPAZRBQkWbu9uxYQD6TpGrQnZwPkSbFP1XwX2bZCy0G5XQ+iEbV+y7sS7sL5jitFKg0RKm3yuxKBCT4lyBYdvNVH009Le6IjYtY2xkOhTnADI4nSf5Mu7yU4PIEbAWA4lys84LPoHjZ5ypT3DV6Dle9bgGWZ karno@cyberfest.ok
 apt:
   disable_suites: [$RELEASE-updates, $RELEASE-security, $RELEASE-backports]
+  apt:
+  sources:
+    docker.list:
+      source: deb [arch=amd64] https://download.docker.com/linux/ubuntu $RELEASE stable
+      keyid: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+    wazuh.list:
+      source: deb https://packages.wazuh.com/4.x/apt/ stable main
+      keyid: 0DCFCA5547B19D2A6099506096B3EE5F29111145
+  package_update: true
+packages:
+  - docker-ce=5:19.03.9~3-0~ubuntu-focal
+  - docker-ce-cli=5:19.03.9~3-0~ubuntu-focal
+  - containerd.io=1.2.13-2
 runcmd:
-  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-  - sudo apt update
-  - sudo apt install -y docker-ce=5:19.03.9~3-0~ubuntu-focal docker-ce-cli=5:19.03.9~3-0~ubuntu-focal containerd.io
-  - sudo docker run --rm -d --name juice-shop -p 3000:3000 bkimminich/juice-shop
+  - docker run -d --restart always --name juice-shop -p 3000:3000 bkimminich/juice-shop
+  - WAZUH_MANAGER="172.16.15.14" apt install -y wazuh-agent
+  - systemctl enable wazuh-agent --now
 EOF
 
 #11. Create network_config.cfg file
-tee network_config.cfg <<EOF
+tee network_config_ubuntu2004.cfg <<EOF
 network:
   version: 1
   config:
@@ -249,8 +262,77 @@ EOF
 sudo terraform plan
 sudo terraform apply -auto-approve
 
-#13. Verify deployments
+#13. Edit main.tf file to deploy Wazuh
+tee -a main.tf <<EOF
+data "template_file" "user_data_wazuh" {
+  template = file("${path.module}/cloud_init_wazuh.cfg")
+}
 
-#14. Destroy all deployments and redeploy
+resource "libvirt_cloudinit_disk" "ci-wazuh" {
+  name           = "ci-wazuh.iso"
+  user_data      = data.template_file.user_data_wazuh.rendered
+  network_config = data.template_file.network_config_ubuntu2004.rendered
+  pool           = libvirt_pool.cyberfest.name
+}
+
+resource "libvirt_volume" "wazuh" {
+  name             = "wazuh.qcow2"
+  pool             = libvirt_pool.cyberfest.name
+  base_volume_name = libvirt_volume.image-ubuntu2004.name
+  size             = 107374182400
+  format           = "qcow2"
+}
+
+resource "libvirt_domain" "wazuh" {
+  name       = "wazuh"
+  arch       = "x86_64"
+  #machine    = "pc-q35-6.1"
+  vcpu       = 8
+  memory     = 16384
+  qemu_agent = "true"
+  cloudinit = libvirt_cloudinit_disk.ci-wazuh.id
+  cpu {
+    mode = "host-passthrough"
+  }
+  video {
+    type = "qxl"
+  }
+  network_interface {
+    network_name   = libvirt_network.cyberfest.name
+    hostname       = "wazuh"
+    mac            = "52:54:00:dd:dd:dd"
+    addresses      = ["172.16.15.14"]
+  }
+  disk {
+    volume_id = libvirt_volume.wazuh.id
+  }
+}
+EOF
+
+#14. Create cloud_init_wazuh.cfg file
+tee cloud_init_wazuh.cfg <<EOF
+#cloud-config
+fqdn: wazuh.cyberfest.id
+hostname: wazuh.cyberfest.id
+users:
+  - name: karno
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    passwd: $6$rounds=4096$dEN6V47uqK2ucbuB$U1FD57fz51bbFpLaKO1HEdTx9Nrz09Y8JNifHQkIwu9/Oq2vg07PYd3YxLXSBU2yWRS02HCJLZGvH7pCYPQRQ/
+    lock_passwd: false
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDZoIbsUfcwKXpQVXlCP+6Qf/bCs0WnJiYY8I0iuMaPX+6tMDA9mwRUj6i6gyLhyYa+AVEd1j3MbwJ2oute4Q4Y1QNPZUbC10g9ToYHUp+rCd5x3Jytn8CXztz6Z9KMG+YBy0otjuaeFOFKij0zTuUMZWXYBoKR7q9rKMkedyFMSFRMsjC5kF2oArFJgPAZRBQkWbu9uxYQD6TpGrQnZwPkSbFP1XwX2bZCy0G5XQ+iEbV+y7sS7sL5jitFKg0RKm3yuxKBCT4lyBYdvNVH009Le6IjYtY2xkOhTnADI4nSf5Mu7yU4PIEbAWA4lys84LPoHjZ5ypT3DV6Dle9bgGWZ karno@cyberfest.ok
+apt:
+  disable_suites: [$RELEASE-backports]
+  package_update: true
+  package_upgrade: true
+runcmd:
+  - mkdir /cyberfest
+  - curl -so /cyberfest/unattended-installation.sh https://packages.wazuh.com/resources/4.2/open-distro/unattended-installation/unattended-installation.sh && bash /cyberfest/unattended-installation.sh > /cyberfest/unattended-installation.log 2>&1
+EOF
+
+#15. Verify deployments
+
+#16. Destroy all deployments and redeploy
 sudo terraform destroy -auto-approve
 sudo terraform apply -auto-approve
