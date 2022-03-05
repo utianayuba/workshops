@@ -1,8 +1,8 @@
 # Host: Fedora 35
+# Virtualization: KVM, QEMU, libvirt, virt-manager
 # References:
 # - https://github.com/dmacvicar/terraform-provider-libvirt
 # - https://www.phillipsj.net/posts/building-a-windows-server-qcow2-image/
-# - https://docs.bigstack.co/docs/downloads/cloud_image
 
 #1. Install Terraform
 sudo dnf install -y dnf-plugins-core
@@ -275,7 +275,6 @@ users:
       - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDZoIbsUfcwKXpQVXlCP+6Qf/bCs0WnJiYY8I0iuMaPX+6tMDA9mwRUj6i6gyLhyYa+AVEd1j3MbwJ2oute4Q4Y1QNPZUbC10g9ToYHUp+rCd5x3Jytn8CXztz6Z9KMG+YBy0otjuaeFOFKij0zTuUMZWXYBoKR7q9rKMkedyFMSFRMsjC5kF2oArFJgPAZRBQkWbu9uxYQD6TpGrQnZwPkSbFP1XwX2bZCy0G5XQ+iEbV+y7sS7sL5jitFKg0RKm3yuxKBCT4lyBYdvNVH009Le6IjYtY2xkOhTnADI4nSf5Mu7yU4PIEbAWA4lys84LPoHjZ5ypT3DV6Dle9bgGWZ karno@cyberfest.ok
 apt:
   disable_suites: [$RELEASE-updates, $RELEASE-security, $RELEASE-backports]
-  apt:
   sources:
     docker.list:
       source: deb [arch=amd64] https://download.docker.com/linux/ubuntu $RELEASE stable
@@ -352,7 +351,8 @@ EOF
 sudo terraform plan
 sudo terraform apply -auto-approve
 
-#19. Verify Windows Server 2019 VM
+#19. Verify Windows Server 2019 VM and install Wazuh agent
+#https://documentation.wazuh.com/current/installation-guide/wazuh-agent/wazuh-agent-package-windows.html
 
 #20. Destroy all deployments and redeploy
 sudo terraform destroy -auto-approve
